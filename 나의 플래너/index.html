@@ -1324,7 +1324,7 @@ function syncCard() {
 function authHint(error) {
   const m = String((error && (error.message || error.code)) || '');
   if (/rate limit|too many|after \d+ seconds|over_email_send_rate_limit/i.test(m)) return '메일 발송 한도에 걸렸어요(무료 플랜은 시간당 몇 통). 잠시 뒤 다시 하거나, 로그인된 폰에서 비밀번호를 정해 비밀번호로 로그인하세요.';
-  if (/Invalid login credentials/i.test(m)) return '이메일 또는 비밀번호가 맞지 않아요.';
+  if (/Invalid login credentials/i.test(m)) return '비밀번호가 맞지 않거나 아직 정하지 않았어요. 먼저 로그인된 폰의 설정에서 비밀번호를 저장해 주세요.';
   if (/Email not confirmed/i.test(m)) return '이메일 인증이 아직 안 됐어요. 메일 코드로 먼저 로그인해 주세요.';
   if (/Password should be|weak/i.test(m)) return '비밀번호가 너무 짧거나 쉬워요. 더 길게 정해 주세요.';
   if (/same as the old|different from the old/i.test(m)) return '이미 같은 비밀번호예요.';
