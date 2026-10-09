@@ -1,0 +1,19 @@
+{
+  "name": "나의 플래너",
+  "short_name": "플래너",
+  "description": "할 일·메모·아이디어·1년 계획을 한곳에서 관리하고 알림을 받습니다.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1f6f3",
+  "theme_color": "#0c8a67",
+  "lang": "ko",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
