@@ -1,7 +1,7 @@
 # 나의 플래너 - 놓치지 않을거에요!
 
 할 일 체크리스트 · 메모 · 아이디어 · 1년 플래너를 한곳에 모은 개인용 웹앱입니다.
-서버 없이 동작하며, 데이터는 사용하는 기기의 브라우저(localStorage)에만 저장됩니다.
+데이터는 기기 브라우저에 저장되고, Supabase를 연결하면 여러 기기에서 동기화됩니다.
 
 - 앱 주소: https://seress22-collab.github.io/my-plan/
 - 휴대폰에서 열고 “홈 화면에 추가”하면 앱처럼 쓸 수 있습니다.
@@ -19,6 +19,24 @@
 - **전체 검색**: 할 일·메모·아이디어·목표 통합 검색, 초성 검색(예: `ㄱㅁㅈ`), `/` 단축키
 - **디자인**: 포레스트 민트(기본) · 블루 · 코랄, 밝게/어둡게
 - **백업**: JSON 백업/복원, 캘린더(.ics) 내보내기(전날·당일 알람 포함)
+
+## 두 휴대폰 동기화 (Supabase)
+
+같은 이메일로 로그인한 기기끼리 할 일·메모·아이디어·플래너가 실시간으로 맞춰집니다.
+항목별 수정 시각으로 합치기 때문에 두 기기에서 따로 고친 내용이 서로 덮어쓰지 않고, 삭제도 전파됩니다.
+알림은 기기마다 각각 울립니다.
+
+설정 방법 (한 번만):
+
+1. [supabase.com](https://supabase.com)에서 무료 프로젝트를 만듭니다.
+2. **SQL Editor**에 [`supabase/schema.sql`](supabase/schema.sql) 내용을 붙여 넣고 Run 합니다.
+3. **Authentication → URL Configuration**의 Site URL·Redirect URLs에 `https://seress22-collab.github.io/my-plan/`을 넣습니다.
+4. **Authentication → Email Templates**의 *Magic Link*와 *Confirm signup* 본문에 `{{ .Token }}`을 넣어 메일에 숫자 코드가 보이게 합니다. (홈 화면 앱에서는 링크보다 코드 입력이 편합니다.)
+5. **Project Settings → API**의 Project URL과 `anon` public 키를 [`나의 플래너/config.js`](나의%20플래너/config.js)에 넣고 `main`에 올립니다.
+6. 각 휴대폰에서 ⚙️ 설정 → ☁️ 두 기기 동기화 → 같은 이메일로 로그인합니다.
+
+`anon` 키는 브라우저용 공개 키라 저장소에 올려도 되며, 데이터는 RLS 규칙으로 로그인한 본인만 읽고 쓸 수 있습니다.
+`service_role` 키는 절대 넣지 마세요.
 
 ## 알림 참고
 

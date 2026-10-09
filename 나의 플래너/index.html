@@ -70,7 +70,7 @@ h2 .sp{flex:1}
 .btn.danger{color:var(--danger)}
 .btn.sm{padding:5px 10px;font-size:13px;border-radius:8px}
 .link{border:0;background:none;color:var(--accent);font-weight:600;font-size:13px;padding:2px 4px}
-input[type=text],input[type=date],input[type=time],input[type=search],select,textarea{width:100%;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:10px 12px;outline:none}
+input[type=text],input[type=email],input[type=date],input[type=time],input[type=search],select,textarea{width:100%;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:10px 12px;outline:none}
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 textarea{resize:vertical;min-height:70px}
 label.field{display:block;margin:12px 0 0}
@@ -194,7 +194,7 @@ mark{background:#ffe58a;color:#1b1f2a;border-radius:3px;padding:0 1px}
 </head>
 <body>
 <header class="top">
-  <div class="brand"><b>나의 플래너 <span class="slogan">- 놓치지 않을거에요!</span></b><small id="todayLabel"></small></div>
+  <div class="brand"><b>나의 플래너 <span class="slogan">- 놓치지 않을거에요!</span></b><small><span id="todayLabel"></span><span id="syncState"></span></small></div>
   <button class="icon-btn" data-action="open-search" aria-label="전체 검색" title="전체 검색">🔍</button>
   <button class="icon-btn" data-action="open-settings" aria-label="설정" title="설정 · 알림 · 백업">⚙️</button>
 </header>
@@ -214,6 +214,7 @@ mark{background:#ffe58a;color:#1b1f2a;border-radius:3px;padding:0 1px}
 <div id="toasts" aria-live="polite"></div>
 <input type="file" id="importFile" accept="application/json,.json" class="sr">
 
+<script src="config.js"></script>
 <script>
 'use strict';
 /* ───────── 데이터 ───────── */
@@ -226,7 +227,7 @@ const DEFAULT_CATS = [
   { id: 'meeting', name: '미팅', color: '#d6455d' },
 ];
 const fresh = () => ({
-  tasks: [], memos: [], ideas: [], plans: {}, fired: {},
+  tasks: [], memos: [], ideas: [], plans: {}, fired: {}, deleted: {},
   settings: { cats: DEFAULT_CATS.map(c => ({ ...c })), dayBeforeTime: '09:00', morningTime: '08:30', eveningTime: '21:00', sound: true },
 });
 function load() {
@@ -243,14 +244,20 @@ function normalize(s) {
   for (const k of ['tasks', 'memos', 'ideas']) if (!Array.isArray(s[k])) s[k] = [];
   if (!s.plans || typeof s.plans !== 'object') s.plans = {};
   if (!s.fired || typeof s.fired !== 'object') s.fired = {};
+  if (!s.deleted || typeof s.deleted !== 'object') s.deleted = {};
   return s;
 }
 let S = load();
 function save() {
   S._updated = Date.now();
+  stamp();
+  persistLocal();
+  pushCloud();
+  queueSync();
+}
+function persistLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { if (!cloud) toast('저장 실패', '브라우저 저장공간을 확인해 주세요.'); }
-  pushCloud();
 }
 /* claude.ai 페이지로 열었을 때: 개인 전용 클라우드 저장(다른 사람은 볼 수 없음) */
 let cloud = null, cloudTimer = null;
@@ -271,7 +278,7 @@ async function initCloud() {
     cloud = ref;
     const d = snap.exists ? snap.data() : null;
     if (d && typeof d.json === 'string' && (d.updated || 0) >= (S._updated || 0)) {
-      S = normalize(JSON.parse(d.json));
+      S = normalize(JSON.parse(d.json)); initSnap();
       try { localStorage.setItem(KEY, d.json); } catch (e) { /* 무시 */ }
       if ($('#sheet').classList.contains('hidden')) render(); else updateBadge();
       checkReminders();
@@ -940,7 +947,8 @@ function openSettings() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   const permTxt = { granted: '✅ 켜짐', denied: '⛔ 차단됨 (브라우저 사이트 설정에서 허용)', default: '꺼짐', unsupported: '이 브라우저는 미지원' }[perm];
   openSheet(`${head('⚙️ 설정')}
-  <h2 style="margin-top:8px">🔔 알림</h2>
+  ${CFG.supabaseUrl ? `<h2 style="margin-top:8px">☁️ 두 기기 동기화</h2>${syncCard()}` : ''}
+  <h2 ${CFG.supabaseUrl ? '' : 'style="margin-top:8px"'}>🔔 알림</h2>
   <div class="card">
     <div class="set-row"><div class="grow"><b>브라우저 알림</b><span class="small muted">${permTxt}</span></div>
       ${perm === 'default' ? '<button class="btn primary sm" data-action="ask-perm">켜기</button>' : ''}<button class="btn sm" data-action="test-notify">테스트</button></div>
@@ -1093,6 +1101,10 @@ const A = {
   'del-cat': el => { if (S.settings.cats.length <= 1) return; const c = catOf(el.dataset.id); if (!confirm(`'${c.name}' 분류를 삭제할까요? 이 분류의 항목은 '기타'로 표시돼요.`)) return; S.settings.cats = S.settings.cats.filter(x => x.id !== el.dataset.id); save(); openSettings(); render(); },
   'palette': el => { ls.set('myplanner.palette', el.dataset.v); applyTheme(); openSettings(); },
   'export-ics': () => exportICS(),
+  'sync-send': () => syncSend(),
+  'sync-verify': () => syncVerify(),
+  'sync-now': () => syncNow(true),
+  'sync-logout': async () => { if (!confirm('로그아웃할까요? 이 휴대폰의 데이터는 그대로 남아요.')) return; await sb.auth.signOut(); },
   'export-json': () => download(`나의플래너-백업-${todayS()}.json`, JSON.stringify(S, null, 1), 'application/json').then(ok => ok && toast('백업 파일을 저장했어요')),
   'import-json': () => $('#importFile').click(),
 };
@@ -1131,7 +1143,7 @@ document.addEventListener('change', e => {
         const data = JSON.parse(rd.result);
         if (!data || !Array.isArray(data.tasks)) throw new Error('형식 오류');
         if (!confirm('현재 데이터를 백업 파일 내용으로 바꿀까요?')) return;
-        S = normalize(data); save(); closeSheet(); render(); toast('복원했어요');
+        S = normalize(data); initSnap(); save(); closeSheet(); render(); toast('복원했어요');
       } catch (err) { toast('복원 실패', '올바른 백업 파일이 아니에요.'); }
       t.value = '';
     };
@@ -1139,16 +1151,184 @@ document.addEventListener('change', e => {
   }
 });
 
+/* ───────── 두 기기 동기화 (Supabase) ─────────
+   항목마다 수정 시각(u)을 기록하고, 삭제는 기록(deleted)으로 남겨
+   두 휴대폰에서 각각 고친 내용이 서로 덮어쓰지 않고 합쳐지게 합니다.
+   알림 발송 기록(fired)은 휴대폰마다 따로 둡니다(양쪽 모두 알림). */
+const CFG = window.PLANNER_CONFIG || {};
+let snap = null;
+function itemsOf(s) {
+  const m = new Map();
+  for (const k of ['tasks', 'memos', 'ideas']) for (const it of s[k]) m.set(`${k}:${it.id}`, it);
+  for (const [y, p] of Object.entries(s.plans)) {
+    (p.goals || []).forEach(g => m.set(`yg:${y}:${g.id}`, g));
+    for (const [mo, mp] of Object.entries(p.months || {})) (mp.goals || []).forEach(g => m.set(`mg:${y}:${mo}:${g.id}`, g));
+  }
+  return m;
+}
+const bodyOf = o => { const { u, ...rest } = o; return JSON.stringify(rest); };
+function notesOf(s) {
+  const m = new Map();
+  for (const [y, p] of Object.entries(s.plans)) for (const [mo, mp] of Object.entries(p.months || {})) m.set(`note:${y}:${mo}`, mp);
+  return m;
+}
+const settingsBody = st => { const { _u, ...rest } = st; return JSON.stringify(rest); };
+function initSnap() {
+  snap = new Map();
+  for (const [k, o] of itemsOf(S)) snap.set(k, bodyOf(o));
+  for (const [k, mp] of notesOf(S)) snap.set(k, mp.note || '');
+  snap.set('settings', settingsBody(S.settings));
+}
+function stamp() {
+  if (!snap) { initSnap(); return; }
+  const now = Date.now(), cur = itemsOf(S);
+  for (const [k, o] of cur) if (snap.get(k) !== bodyOf(o)) o.u = now;
+  for (const k of snap.keys()) if (/^(tasks|memos|ideas|yg|mg):/.test(k) && !cur.has(k)) S.deleted[k] = now;
+  for (const [k, mp] of notesOf(S)) if ((snap.get(k) || '') !== (mp.note || '')) mp.noteU = now;
+  if (snap.get('settings') !== settingsBody(S.settings)) S.settings._u = now;
+  for (const [k, v] of Object.entries(S.deleted)) if (now - v > 180 * 864e5) delete S.deleted[k];
+  initSnap();
+}
+function mergeStates(a, b) {
+  const A = normalize(JSON.parse(JSON.stringify(a))), B = normalize(JSON.parse(JSON.stringify(b)));
+  const del = { ...A.deleted };
+  for (const [k, v] of Object.entries(B.deleted)) del[k] = Math.max(del[k] || 0, v);
+  const alive = (k, o) => !(del[k] && del[k] >= (o.u || 0));
+  const pick = (xa, xb, pre) => {
+    const m = new Map();
+    for (const o of xa) m.set(o.id, o);
+    for (const o of xb) { const c = m.get(o.id); if (!c || (o.u || 0) > (c.u || 0)) m.set(o.id, o); }
+    return [...m.values()].filter(o => alive(pre + o.id, o)).sort((x, y) => String(x.id).localeCompare(String(y.id)));
+  };
+  const out = { ...A, deleted: del, fired: A.fired };
+  for (const c of ['tasks', 'memos', 'ideas']) out[c] = pick(A[c], B[c], c + ':');
+  out.plans = {};
+  for (const y of new Set([...Object.keys(A.plans), ...Object.keys(B.plans)])) {
+    const pa = A.plans[y] || { goals: [], months: {} }, pb = B.plans[y] || { goals: [], months: {} }, months = {};
+    for (let mo = 1; mo <= 12; mo++) {
+      const ma = (pa.months || {})[mo] || { goals: [], note: '' }, mb = (pb.months || {})[mo] || { goals: [], note: '' };
+      const useB = (mb.noteU || 0) > (ma.noteU || 0);
+      months[mo] = { goals: pick(ma.goals || [], mb.goals || [], `mg:${y}:${mo}:`), note: (useB ? mb.note : ma.note) || '', noteU: Math.max(ma.noteU || 0, mb.noteU || 0) };
+    }
+    out.plans[y] = { goals: pick(pa.goals || [], pb.goals || [], `yg:${y}:`), months };
+  }
+  if ((B.settings._u || 0) > (A.settings._u || 0)) out.settings = B.settings;
+  return out;
+}
+const forCloud = s => { const { fired, _updated, ...rest } = s; return rest; };
+function canon(v) {
+  if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
+  return JSON.stringify(v);
+}
+
+let sb = null, sbUser = null, chan = null, syncing = false, syncAgain = false, syncTimer = null;
+let syncStatus = '', lastSync = 0, pendingEmail = '';
+function loadScript(src) {
+  return new Promise((ok, no) => { const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = no; document.head.appendChild(el); });
+}
+function setSync(st) {
+  if (st !== undefined) syncStatus = st;
+  const el = $('#syncState'); if (!el) return;
+  el.textContent = !sbUser ? '' : { syncing: ' · ☁️ 동기화 중…', ok: ' · ☁️ 동기화됨', error: ' · ⚠️ 동기화 대기', '': '' }[syncStatus] || '';
+}
+async function initSync() {
+  if (!CFG.supabaseUrl || !CFG.supabaseAnonKey) return;
+  try { await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js'); }
+  catch (e) { return; }
+  sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'myplanner.auth' } });
+  sb.auth.onAuthStateChange((ev, session) => {
+    const u = session ? session.user : null, changed = (u && u.id) !== (sbUser && sbUser.id);
+    sbUser = u;
+    if (!changed) return;
+    setTimeout(() => {
+      if (chan) { sb.removeChannel(chan); chan = null; }
+      if (u) {
+        pendingEmail = '';
+        chan = sb.channel('planner-' + u.id)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'planner_state', filter: `user_id=eq.${u.id}` }, () => queueSync(300))
+          .subscribe();
+        if (ev === 'SIGNED_IN') toast('☁️ 동기화를 시작해요', u.email || '');
+        syncNow();
+      }
+      setSync(u ? syncStatus : '');
+      if (sheetKind === 'settings') openSettings();
+    }, 0);
+  });
+}
+function queueSync(ms = 1500) {
+  if (!sb || !sbUser) return;
+  clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms);
+}
+async function syncNow(manual) {
+  if (!sb || !sbUser) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true; setSync('syncing');
+  try {
+    const { data, error } = await sb.from('planner_state').select('data').eq('user_id', sbUser.id).maybeSingle();
+    if (error) throw error;
+    stamp();
+    const remote = data && data.data && typeof data.data === 'object' ? data.data : null;
+    const merged = mergeStates(S, remote || S);
+    const mc = canon(forCloud(merged));
+    if (mc !== canon(forCloud(S))) {
+      merged._updated = Date.now();
+      S = merged; persistLocal(); initSnap();
+      if ($('#sheet').classList.contains('hidden')) render(); else updateBadge();
+    }
+    if (!remote || mc !== canon(forCloud(normalize(remote)))) {
+      const { error: e2 } = await sb.from('planner_state').upsert({ user_id: sbUser.id, data: forCloud(merged), updated_at: new Date().toISOString() });
+      if (e2) throw e2;
+    }
+    lastSync = Date.now(); setSync('ok');
+    if (manual) toast('동기화했어요');
+  } catch (e) {
+    setSync('error');
+    if (manual) toast('동기화하지 못했어요', (e && e.message) || '인터넷 연결을 확인해 주세요.');
+  } finally {
+    syncing = false;
+    if (syncAgain) { syncAgain = false; queueSync(300); }
+  }
+}
+function syncCard() {
+  if (!sb) return '<div class="card pad small muted">동기화 모듈을 불러오지 못했어요. 인터넷 연결을 확인한 뒤 앱을 다시 열어 주세요.</div>';
+  if (sbUser) return `<div class="card">
+    <div class="set-row"><div class="grow"><b>✅ ${esc(sbUser.email || '로그인됨')}</b><span class="small muted">${lastSync ? '마지막 동기화 ' + new Date(lastSync).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '동기화 준비 중'}</span></div><button class="btn sm" data-action="sync-now">지금 동기화</button></div>
+    <div class="set-row"><div class="grow small muted">다른 휴대폰에서도 같은 이메일로 로그인하면 내용이 자동으로 맞춰져요.</div><button class="btn sm danger" data-action="sync-logout">로그아웃</button></div></div>`;
+  return `<div class="card pad">
+    <div class="small muted" style="margin-bottom:8px">두 휴대폰에서 <b>같은 이메일</b>로 로그인하면 할 일·메모·아이디어·플래너가 실시간으로 맞춰져요. 지금 이 폰에 있는 내용도 그대로 합쳐져요.</div>
+    <div class="row"><input type="email" id="syncEmail" placeholder="이메일 주소" value="${esc(pendingEmail)}" data-enter="sync-send" autocomplete="email"><button class="btn primary sm" data-action="sync-send">코드 받기</button></div>
+    ${pendingEmail ? `<div class="row" style="margin-top:8px"><input type="text" id="syncCode" inputmode="numeric" placeholder="메일로 받은 숫자 코드" data-enter="sync-verify" autocomplete="one-time-code"><button class="btn primary sm" data-action="sync-verify">확인</button></div>
+    <div class="small muted" style="margin-top:6px">${esc(pendingEmail)}로 메일을 보냈어요. 숫자 코드를 입력하거나, 이 브라우저에서 메일 속 링크를 눌러도 돼요.</div>` : ''}</div>`;
+}
+async function syncSend() {
+  const email = ($('#syncEmail') || {}).value.trim();
+  if (!/^\S+@\S+\.\S+$/.test(email)) { toast('이메일 주소를 확인해 주세요'); return; }
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: location.origin + location.pathname } });
+  if (error) { toast('메일을 보내지 못했어요', error.message); return; }
+  pendingEmail = email; toast('📧 로그인 메일을 보냈어요', email); openSettings();
+  setTimeout(() => { const c = $('#syncCode'); if (c) c.focus(); }, 100);
+}
+async function syncVerify() {
+  const token = ($('#syncCode') || {}).value.replace(/\s/g, '');
+  if (!/^\d{6,10}$/.test(token)) { toast('메일로 받은 숫자 코드를 입력해 주세요'); return; }
+  const { error } = await sb.auth.verifyOtp({ email: pendingEmail, token, type: 'email' });
+  if (error) toast('코드가 맞지 않아요', '새 코드를 받아 다시 시도해 주세요.');
+}
+
 /* ───────── 시작 ───────── */
 applyTheme();
+initSnap();
 render();
 checkReminders();
 setInterval(checkReminders, 20000);
 let lastDay = todayS();
 setInterval(() => { if (todayS() !== lastDay) { lastDay = todayS(); if ($('#sheet').classList.contains('hidden')) render(); } }, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkReminders(); if ($('#sheet').classList.contains('hidden')) render(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkReminders(); if ($('#sheet').classList.contains('hidden')) render(); syncNow(); } });
+setInterval(() => { if (!document.hidden) syncNow(); }, 60000);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 initCloud();
+initSync();
 </script>
 </body>
 </html>
